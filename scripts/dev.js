@@ -7,6 +7,7 @@ const concat = require("./build/concat");
 const copy = require("./build/copy");
 const sass = require("./build/sass");
 const jsonlint = require("./build/jsonlint");
+const localSettingsArgs = require("./start");
 
 const ROOT = path.resolve(__dirname, "..");
 const EDITOR_SRC = path.join(
@@ -104,6 +105,8 @@ async function main() {
     }
     if (opts.userDir) {
         scriptArgs.push("-u", opts.userDir);
+    } else {
+        scriptArgs.push(...localSettingsArgs(opts.passthrough));
     }
     scriptArgs.push(...opts.passthrough);
 

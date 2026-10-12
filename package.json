@@ -10,7 +10,7 @@
     },
     "private": "true",
     "scripts": {
-        "start": "node packages/node_modules/node-red/red.js",
+        "start": "node scripts/start.js",
         "build": "node scripts/build",
         "build-dev": "node scripts/build --dev",
         "dev": "node scripts/dev",
@@ -43,6 +43,8 @@
         }
     ],
     "dependencies": {
+        "@openai/codex-sdk": "0.162.0",
+        "@slack/bolt": "5.1.0",
         "acorn": "8.19.0",
         "acorn-walk": "8.3.5",
         "ajv": "8.20.0",

@@ -6,6 +6,7 @@
 .project
 .sessions.json
 .settings
+/settings.js
 .tern-project
 .i18n-editor-metadata
 *.backup

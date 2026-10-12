@@ -62,6 +62,84 @@ If you want to run the latest code from git, here's how to get started:
 
         npm start
 
+To use a repository-local configuration, create `settings.js` at the repository root.
+`npm start` and `npm run dev` load it automatically if present. Use `--settings`
+or `--userDir` to choose a different configuration. Set `gitReposDirectory` to
+an absolute path to one Git repository or to a directory containing Git
+repositories as immediate subdirectories. The local settings file is ignored
+by Git because it can contain private configuration. Restart Node-RED after
+changing it.
+
+The `git repo` node accepts a configured repository and branch or reads both
+from `msg.payload.repository` and `msg.payload.branch`. It checks out the
+selected branch before forwarding the message. Switching to another branch
+requires a clean working tree; remote-tracking branches create a local tracking
+branch without fetching. No forced checkout is performed.
+
+Connect it to a `codex agent` node. Send a prompt in `msg.payload` or configure
+the agent to read `msg.payload.prompt` when the payload holds repository, branch,
+and prompt together. The agent reads the repository path from `msg.git.path` and
+returns its answer in `msg.payload` with thread metadata in `msg.codex`.
+The editor fields can instead read other message properties, such as `msg.path`
+and `msg.prompt`.
+Configure Codex authentication for the Node-RED process before running a flow.
+Each input starts a new Codex thread and can use OpenAI credits. The agent is
+read-only by default; its editor has an explicit option to allow file edits.
+The agent verifies the checked-out branch before it runs.
+
+For HTTP endpoints, connect `http in` -> `bearer auth` -> the protected nodes
+-> `http response`. Configure the expected token in the Bearer Auth node's
+credential field. It forwards only requests with an exact
+`Authorization: Bearer <token>` header; all other requests receive HTTP 401.
+Use HTTPS and avoid logging the request's authorization header.
+
+The `slack post` node sends text through the Slack Bolt SDK. Set its bot token
+and signing secret as node credentials. Choose a channel ID (`C...` or `G...`)
+or a user ID (`U...` or `W...`) for a DM. The text defaults to `msg.payload`;
+on success, `msg.slack` contains the posted channel ID and timestamp. Grant
+the app `chat:write` and, for direct messages, `im:write`. The node does not
+start a Slack event listener or require a public HTTP endpoint.
+
+To send `msg.payload` as an attached Markdown file instead, select **Markdown
+file** in the same node. Its contents come from the payload string, not a file
+on disk; the default filename is `message.md`. The result contains
+`msg.slack.fileId` instead of a message timestamp. Add the `files:write` scope
+to the Slack app for file uploads.
+
+Use the `slack socket` input node to receive Slack messages over Bolt Socket
+Mode without a public webhook. Configure its bot token and app-level token
+(`connections:write`) as credentials, enable Socket Mode, and subscribe to
+message events or app mentions in the Slack app. App mentions are the safer
+default; enable all messages explicitly if you need them. To receive slash
+commands, create a command in the Slack app and grant the `commands` scope.
+Reinstall the app in the workspace after changing its OAuth scopes.
+Slash commands are enabled by default and acknowledged immediately. Their
+argument text is `msg.payload` and the command name is `msg.slack.command`;
+the response URL is never forwarded. The output uses `msg.payload`
+for text, `msg.topic` for the channel ID, and `msg.slack` for event metadata.
+Optional channel and user ID filters narrow the input; a Switch node can route
+on `msg.topic`, `msg.slack.user`, or `msg.slack.eventType`. Bot messages and
+message edits are ignored. The Socket Mode connection is closed on redeploy.
+
+To open a form from a slash command, use the canvas node `slack form flow`:
+`slack socket → your data node → slack form flow`. Configure its command, title,
+and fields; new nodes have no preset fields. A select field reads an array from
+its configured message path, for example `msg.payload.projects`. Entries may be
+strings or `{label:"Project",value:"project-id"}` objects. A dependent select
+can read a map of arrays keyed by its parent field's selected value. No option
+is selected automatically; an explicit field `default` may preselect one.
+The data node must preserve `msg.slack` and finish before Slack's short-lived
+trigger expires. The form has one output, carrying submitted field values in
+`msg.payload`; no options feedback wiring is needed.
+For local Git repositories, one `git list` node in **Slack form data** mode
+prepares both collections: wire `slack socket → git list → slack form flow` and
+configure select sources as `msg.payload.repositories` and
+`msg.payload.branches` (the latter with `dependsOn: "repository"`).
+The form itself does not inspect Git or require an options feedback wire in
+this mode. Channel and user filters on the Socket node remain optional; without
+them, anyone allowed to invoke the command can see the supplied options.
+Trigger ID and response URL are never forwarded.
+
 ## Contributing
 
 Before raising a pull-request, please read our [contributing guide](https://github.com/node-red/node-red/blob/main/CONTRIBUTING.md).
