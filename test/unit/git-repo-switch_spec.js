@@ -77,6 +77,53 @@ describe("git repo checkout without an HTTP server", function() {
         assert.equal(fs.readFileSync(path.join(repository, "untracked.txt"), "utf8"), "keep");
     });
 
+    it("optionally fetches and fast-forwards a remote tracking branch", async function() {
+        const remote = path.join(root, "remote.git");
+        execFileSync("git", ["init", "--bare", remote]);
+        git(["remote", "set-url", "origin", remote]);
+        git(["push", "origin", "HEAD:refs/heads/release/6.7.2"]);
+        const oldHead = git(["rev-parse", "HEAD"]);
+        const payload = {repository: "example", branch: "refs/remotes/origin/release/6.7.2"};
+
+        const first = await send(new GitRepoNode({}), payload);
+        assert.equal(first.error, undefined);
+        assert.equal(first.output.git.ref, "refs/heads/release/6.7.2");
+        assert.equal(git(["rev-parse", "HEAD"]), oldHead);
+
+        const newHead = git(["-c", "user.name=Test", "-c", "user.email=test@example.com",
+            "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "New remote commit"]);
+        git(["push", "origin", newHead + ":refs/heads/release/6.7.2"]);
+        git(["update-ref", "refs/remotes/origin/release/6.7.2", oldHead]);
+
+        const unchanged = await send(new GitRepoNode({}), payload);
+        assert.equal(unchanged.error, undefined);
+        assert.equal(git(["rev-parse", "HEAD"]), oldHead);
+
+        const fetched = await send(new GitRepoNode({fetchRemote: true}), payload);
+        assert.equal(fetched.error, undefined);
+        assert.equal(git(["rev-parse", "refs/remotes/origin/release/6.7.2"]), newHead);
+        assert.equal(git(["rev-parse", "HEAD"]), oldHead);
+
+        fs.writeFileSync(path.join(repository, "untracked.txt"), "keep");
+        const dirty = await send(new GitRepoNode({pullLatest: true}), payload);
+        assert.match(dirty.error.message, /uncommitted changes/);
+        assert.equal(git(["rev-parse", "HEAD"]), oldHead);
+        assert.equal(fs.readFileSync(path.join(repository, "untracked.txt"), "utf8"), "keep");
+        fs.removeSync(path.join(repository, "untracked.txt"));
+
+        const updated = await send(new GitRepoNode({pullLatest: true}), payload);
+        assert.equal(updated.error, undefined);
+        assert.equal(updated.output.git.branch, "release/6.7.2");
+        assert.equal(git(["rev-parse", "HEAD"]), newHead);
+    });
+
+    it("does not pull a local branch without an upstream", async function() {
+        const result = await send(new GitRepoNode({pullLatest: true}), {repository: "example", branch: "feature"});
+        assert.match(result.error.message, /no upstream/);
+        assert.equal(result.output, undefined);
+        assert.equal(git(["branch", "--show-current"]), "main");
+    });
+
     it("does not switch branches when the working tree is dirty", async function() {
         fs.writeFileSync(path.join(repository, "untracked.txt"), "keep");
         const result = await send(new GitRepoNode({}), {repository: "example", branch: "feature"});

@@ -74,7 +74,12 @@ The `git repo` node accepts a configured repository and branch or reads both
 from `msg.payload.repository` and `msg.payload.branch`. It checks out the
 selected branch before forwarding the message. Switching to another branch
 requires a clean working tree; remote-tracking branches create a local tracking
-branch without fetching. No forced checkout is performed.
+branch without fetching by default. No forced checkout is performed.
+The optional **Fetch remote updates** checkbox runs `git fetch --all --prune`
+before branch selection. **Fast-forward to latest** also fetches, then advances
+the checked-out branch to its upstream with a fast-forward-only merge. It fails
+if there is no upstream, the branches have diverged, or the working tree is dirty.
+Leave both unchecked to use only locally known refs without changing commit history.
 
 Connect it to a `codex agent` node. Send a prompt in `msg.payload` or configure
 the agent to read `msg.payload.prompt` when the payload holds repository, branch,
