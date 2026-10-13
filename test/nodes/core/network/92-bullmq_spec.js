@@ -16,12 +16,33 @@ describe("bullmq nodes", function() {
             this.name = name;
             this.options = options;
             this.jobs = [];
+            this.waiting = [];
+            this.activeCount = 0;
+            this.delayedCount = 0;
+            this.prioritizedCount = 0;
+            this.waitingChildrenCount = 0;
             queues.push(this);
         }
 
         async add(name, data) {
             this.jobs.push({name, data});
+            this.waiting.push({id: "job-1"});
             return {id: "job-1", name};
+        }
+
+        async getWaiting() {
+            return this.waiting;
+        }
+
+        async getJobCounts(...types) {
+            const counts = {
+                waiting: this.waiting.length,
+                active: this.activeCount,
+                delayed: this.delayedCount,
+                prioritized: this.prioritizedCount,
+                "waiting-children": this.waitingChildrenCount
+            };
+            return Object.fromEntries(types.map(type => [type, counts[type]]));
         }
 
         async close() {
@@ -80,6 +101,7 @@ describe("bullmq nodes", function() {
                         node.send = message => { node.sent = message; };
                         node.status = () => {};
                         node.error = error => { node.lastError = error; };
+                        node.warn = error => { node.lastWarning = error; };
                         node.credentials = instances.currentCredentials;
                     },
                     registerType(name, constructor) { types[name] = constructor; },
@@ -103,9 +125,42 @@ describe("bullmq nodes", function() {
         });
         assert.deepEqual(queues[0].jobs, [{name: "work", data: {payload: {action: "run"}, topic: "test"}}]);
         assert.equal(result.output, msg);
-        assert.deepEqual(msg.bullmq, {queue: "tasks", jobId: "job-1", name: "work"});
+        assert.deepEqual(msg.bullmq, {queue: "tasks", jobId: "job-1", name: "work", pendingCount: 1, jobsAhead: 0});
         await close(node);
         assert.equal(queues[0].closed, true);
+    });
+
+    it("reports unfinished jobs and jobs ahead when enqueuing", async function() {
+        const node = create("bullmq out", {redis: "redis", queue: "tasks"});
+        queues[0].waiting.push({id: "older-1"}, {id: "older-2"});
+        queues[0].activeCount = 2;
+        queues[0].delayedCount = 3;
+        queues[0].prioritizedCount = 1;
+        queues[0].waitingChildrenCount = 1;
+        const {output, error} = await send(node, {payload: "work"});
+        assert.equal(error, undefined);
+        assert.equal(output.bullmq.pendingCount, 10);
+        assert.equal(output.bullmq.jobsAhead, 4);
+        assert.deepEqual(queues[0].jobs[0].data, {payload: "work"});
+    });
+
+    it("reports no waiting position if a worker already took the job", async function() {
+        const node = create("bullmq out", {redis: "redis", queue: "tasks"});
+        queues[0].getWaiting = async () => [];
+        const {output, error} = await send(node, {payload: "work"});
+        assert.equal(error, undefined);
+        assert.equal(output.bullmq.jobsAhead, null);
+    });
+
+    it("forwards an enqueued job even if the count query fails", async function() {
+        const node = create("bullmq out", {redis: "redis", queue: "tasks"});
+        queues[0].getJobCounts = async () => { throw new Error("Count unavailable"); };
+        const {output, error} = await send(node, {payload: "work"});
+        assert.equal(error, undefined);
+        assert.equal(queues[0].jobs.length, 1);
+        assert.equal(output.bullmq.pendingCount, null);
+        assert.equal(output.bullmq.jobsAhead, null);
+        assert.match(node.lastWarning.message, /Count unavailable/);
     });
 
     it("rejects non-serializable messages and reports queue failures", async function() {
