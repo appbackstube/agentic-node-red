@@ -92,6 +92,16 @@ Each input starts a new Codex thread and can use OpenAI credits. The agent is
 read-only by default; its editor has an explicit option to allow file edits.
 The agent verifies the checked-out branch before it runs.
 
+For Redis-backed jobs, configure a `bullmq redis` server (host, port, database,
+optional username/password and TLS) in both `bullmq out` and `bullmq in`.
+Set the same queue name on both nodes. `bullmq out` enqueues a JSON-serializable
+message and forwards it with `msg.bullmq.jobId`; `bullmq in` receives the job
+and emits its message with BullMQ metadata. Set **Simultaneous jobs** on each
+`bullmq in` node to control that worker's concurrency (default: 1). A job is
+marked complete when it is handed to the Node-RED flow, **not** when downstream
+nodes finish; downstream failures do not retry it. Do not send messages with
+request/response handles, circular data, or other non-JSON values to the queue.
+
 For HTTP endpoints, connect `http in` -> `bearer auth` -> the protected nodes
 -> `http response`. Configure the expected token in the Bearer Auth node's
 credential field. It forwards only requests with an exact
