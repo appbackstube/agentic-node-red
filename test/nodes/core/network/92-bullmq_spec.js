@@ -8,6 +8,7 @@ describe("bullmq nodes", function() {
     let instances;
     let queues;
     let workers;
+    let nextNodeId;
 
     class FakeQueue extends EventEmitter {
         constructor(name, options) {
@@ -44,7 +45,10 @@ describe("bullmq nodes", function() {
 
     function create(type, config, credentials) {
         instances.currentCredentials = credentials;
-        return new types[type](config);
+        const node = new types[type](config);
+        node.id = `node-${++nextNodeId}`;
+        instances[node.id] = node;
+        return node;
     }
 
     function send(node, msg) {
@@ -63,6 +67,7 @@ describe("bullmq nodes", function() {
         instances = {};
         queues = [];
         workers = [];
+        nextNodeId = 0;
         const moduleRecord = require.cache[require.resolve("bullmq")];
         const original = moduleRecord.exports;
         moduleRecord.exports = {Queue: FakeQueue, Worker: FakeWorker};
@@ -115,17 +120,54 @@ describe("bullmq nodes", function() {
         assert.match((await send(node, {payload: "test"})).error.message, /Redis unavailable/);
     });
 
-    it("consumes queued jobs with configured concurrency and new message IDs", async function() {
+    it("waits for the flow to acknowledge each job before processing the next", async function() {
         const node = create("bullmq in", {redis: "redis", queue: "tasks", concurrency: "4"});
+        const completion = create("bullmq done", {});
         assert.equal(workers[0].name, "tasks");
         assert.equal(workers[0].options.concurrency, 4);
         assert.equal(workers[0].options.connection.maxRetriesPerRequest, null);
-        await workers[0].process({id: "job-2", name: "work", data: {_msgid: "old-id", payload: "go", topic: "keep"}});
-        assert.deepEqual(node.sent, {payload: "go", topic: "keep", bullmq: {queue: "tasks", jobId: "job-2", name: "work"}});
-        await workers[0].process({id: "job-3", name: "external", data: "value"});
+        let finished = false;
+        const processing = workers[0].process({id: "job-2", name: "work", data: {_msgid: "old-id", payload: "go", topic: "keep"}});
+        processing.then(() => { finished = true; });
+        assert.equal(node.sent.payload, "go");
+        assert.equal(node.sent.topic, "keep");
+        assert.equal(node.sent._msgid, undefined);
+        assert.equal(node.sent.bullmq.jobId, "job-2");
+        assert.equal(node.sent.bullmq.workerId, node.id);
+        await Promise.resolve();
+        assert.equal(finished, false);
+        assert.equal((await send(completion, {...node.sent, bullmq: {...node.sent.bullmq, jobId: "other"}})).error.message,
+            "BullMQ job has already finished or does not match this worker");
+        assert.equal(finished, false);
+        assert.equal((await send(completion, node.sent)).error, undefined);
+        await processing;
+        assert.equal(finished, true);
+        assert.ok((await send(completion, node.sent)).error);
+        const second = workers[0].process({id: "job-3", name: "external", data: "value"});
         assert.deepEqual(node.sent.payload, "value");
+        await send(completion, node.sent);
+        await second;
         await close(node);
         assert.equal(workers[0].closed, true);
+    });
+
+    it("fails a job from an error path and rejects a missing completion", async function() {
+        const node = create("bullmq in", {redis: "redis", queue: "tasks"});
+        const failure = create("bullmq done", {result: "failed"});
+        const processing = workers[0].process({id: "job-4", name: "work", data: {payload: "go"}});
+        const rejection = assert.rejects(processing, /downstream error/);
+        assert.equal((await send(failure, {...node.sent, error: {message: "downstream error"}})).error, undefined);
+        await rejection;
+        assert.match((await send(failure, {payload: "missing"})).error.message, /No active BullMQ job/);
+        await close(node);
+    });
+
+    it("releases a pending job when its worker closes", async function() {
+        const node = create("bullmq in", {redis: "redis", queue: "tasks"});
+        const processing = workers[0].process({id: "job-5", name: "work", data: {}});
+        const rejection = assert.rejects(processing, /flow stopped/);
+        await close(node);
+        await rejection;
     });
 
     it("does not start a worker without Redis or with invalid concurrency", function() {

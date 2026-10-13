@@ -98,8 +98,14 @@ Set the same queue name on both nodes. `bullmq out` enqueues a JSON-serializable
 message and forwards it with `msg.bullmq.jobId`; `bullmq in` receives the job
 and emits its message with BullMQ metadata. Set **Simultaneous jobs** on each
 `bullmq in` node to control that worker's concurrency (default: 1). A job is
-marked complete when it is handed to the Node-RED flow, **not** when downstream
-nodes finish; downstream failures do not retry it. Do not send messages with
+marked complete only when a downstream `bullmq done` node receives the message.
+Connect it after the last asynchronous step. With a single `bullmq in` worker
+and **Simultaneous jobs** set to 1, the next queued job waits until then. If
+several branches must finish, join them before `bullmq done`; a quick receipt
+branch alone must not acknowledge the job. Route errors to a separate
+`bullmq done` node set to **Failed**. If no completion message arrives, the
+job remains active; on redeploy it fails and follows BullMQ's retry policy.
+Do not send messages with
 request/response handles, circular data, or other non-JSON values to the queue.
 
 For HTTP endpoints, connect `http in` -> `bearer auth` -> the protected nodes
