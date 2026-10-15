@@ -74,6 +74,37 @@ describe("git list Node", function() {
         assert.equal(result.output.slack.command, "/agent");
     });
 
+    it("fetches remote branches on every input in every mode", async function() {
+        const repository = path.join(root, "example");
+        const remote = path.join(root, "remote.git");
+        execFileSync("git", ["init", "--bare", remote], {stdio: "ignore"});
+        execFileSync("git", ["remote", "add", "origin", remote], {cwd: repository});
+
+        for (const mode of ["repositories", "branches", "formData"]) {
+            const branch = "new-" + mode;
+            execFileSync("git", ["push", "origin", "HEAD:refs/heads/" + branch], {cwd: repository, stdio: "ignore"});
+            const remoteRef = "refs/remotes/origin/" + branch;
+            execFileSync("git", ["update-ref", "-d", remoteRef], {cwd: repository});
+
+            const message = {payload: {repository: "example"}};
+            const result = await send(new GitListNode({mode}), message);
+            assert.equal(result.error, undefined);
+            assert.equal(execFileSync("git", ["rev-parse", "--verify", remoteRef], {cwd: repository, encoding: "utf8"}).trim().length, 40);
+            if (mode === "branches") {
+                assert.ok(result.output.options.some(option => option.value === remoteRef));
+            } else if (mode === "formData") {
+                assert.ok(result.output.payload.branches.example.some(option => option.value === remoteRef));
+            }
+        }
+    });
+
+    it("reports a fetch failure instead of returning stale branches", async function() {
+        execFileSync("git", ["remote", "add", "origin", path.join(root, "missing.git")], {cwd: path.join(root, "example")});
+        const result = await send(new GitListNode({mode: "branches"}), {payload: {repository: "example"}});
+        assert.equal(result.output, undefined);
+        assert.ok(result.error);
+    });
+
     it("rejects unknown repositories without exposing other paths", async function() {
         const result = await send(new GitListNode({mode: "branches"}), {payload: {repository: "../other"}});
         assert.equal(result.output, undefined);
