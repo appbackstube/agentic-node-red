@@ -152,6 +152,9 @@ is selected automatically; an explicit field `default` may preselect one.
 The data node must preserve `msg.slack` and finish before Slack's short-lived
 trigger expires. The form has one output, carrying submitted field values in
 `msg.payload`; no options feedback wiring is needed.
+If the form fails to open, an `interaction expired` error means the upstream
+data work took too long. A Slack API error code such as `invalid_arguments`
+means Slack rejected the modal; check the configured fields and Slack app.
 For local Git repositories, one `git list` node in **Slack form data** mode
 prepares both collections: wire `slack socket → git list → slack form flow` and
 configure select sources as `msg.payload.repositories` and

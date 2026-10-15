@@ -195,6 +195,30 @@ describe("slack form flow Node", function() {
         form.emit("close");
     });
 
+    it("reports an expired trigger instead of hiding the cause", async function() {
+        socket.openForm = async function() { throw new Error("Slack form interaction expired"); };
+        form = new FormNode({id: "form-1", command: "/agent", title: "Agent task", fields: '[{"name":"note","label":"Note"}]'});
+        const error = await incoming(form, {
+            slack: {eventType: "slash_command", command: "/agent", channel: "C123ABC", user: "U123ABC", socketId: "socket-1", interactionId: "grant-1"}
+        });
+        assert.equal(error.message, "Slack form interaction expired");
+        form.emit("close");
+    });
+
+    it("reports Slack API error codes from responses and rejected requests", async function() {
+        form = new FormNode({id: "form-1", command: "/agent", title: "Agent task", fields: '[{"name":"note","label":"Note"}]'});
+        const message = {
+            slack: {eventType: "slash_command", command: "/agent", channel: "C123ABC", user: "U123ABC", socketId: "socket-1", interactionId: "grant-1"}
+        };
+        socket.openForm = async function() { return {ok: false, error: "invalid_arguments"}; };
+        assert.equal((await incoming(form, message)).message, "Slack form could not open: invalid_arguments");
+        socket.openForm = async function() { throw Object.assign(new Error("An API error occurred"), {data: {error: "invalid_trigger"}}); };
+        assert.equal((await incoming(form, message)).message, "Slack form could not open: invalid_trigger");
+        socket.openForm = async function() { throw Object.assign(new Error("secret"), {data: {error: "secret xoxb-token"}}); };
+        assert.equal((await incoming(form, message)).message, "Slack form could not open");
+        form.emit("close");
+    });
+
     it("emits a submission only after fresh options verify the selection", async function() {
         form = new FormNode({id: "form-1", command: "/agent", title: "Agent task", fields: JSON.stringify([
             {name: "repository", label: "Repository", type: "select", source: "msg.payload.repositories"},
