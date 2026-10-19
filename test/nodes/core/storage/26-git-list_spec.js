@@ -9,6 +9,7 @@ const gitListNode = require("nr-test-utils").require("@node-red/nodes/core/stora
 describe("git list Node", function() {
     let root;
     let GitListNode;
+    let settings;
 
     function send(node, message) {
         return new Promise(resolve => {
@@ -27,8 +28,9 @@ describe("git list Node", function() {
         git(["init"]);
         git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "Initial"]);
         git(["branch", "-M", "main"]);
+        settings = {gitReposDirectory: root};
         gitListNode({
-            settings: {gitReposDirectory: root},
+            settings,
             util: {
                 evaluateNodeProperty(value, type, node, message) {
                     return type === "msg" ? value.split(".").reduce((result, key) => result && result[key], message) : value;
@@ -74,7 +76,21 @@ describe("git list Node", function() {
         assert.equal(result.output.slack.command, "/agent");
     });
 
-    it("fetches remote branches on every input in every mode", async function() {
+    it("completes synchronously in every mode", function() {
+        for (const mode of ["repositories", "branches", "formData"]) {
+            const node = new GitListNode({mode});
+            let output;
+            let completed = false;
+            node.emit("input", {payload: {repository: "example"}}, message => { output = message; }, error => {
+                assert.equal(error, undefined);
+                completed = true;
+            });
+            assert.equal(completed, true);
+            assert.ok(output);
+        }
+    });
+
+    it("never fetches missing remote branches in any mode", async function() {
         const repository = path.join(root, "example");
         const remote = path.join(root, "remote.git");
         execFileSync("git", ["init", "--bare", remote], {stdio: "ignore"});
@@ -89,20 +105,54 @@ describe("git list Node", function() {
             const message = {payload: {repository: "example"}};
             const result = await send(new GitListNode({mode}), message);
             assert.equal(result.error, undefined);
-            assert.equal(execFileSync("git", ["rev-parse", "--verify", remoteRef], {cwd: repository, encoding: "utf8"}).trim().length, 40);
+            assert.throws(() => execFileSync("git", ["rev-parse", "--verify", remoteRef], {cwd: repository, stdio: "ignore"}));
             if (mode === "branches") {
-                assert.ok(result.output.options.some(option => option.value === remoteRef));
+                assert.equal(result.output.options.some(option => option.value === remoteRef), false);
             } else if (mode === "formData") {
-                assert.ok(result.output.payload.branches.example.some(option => option.value === remoteRef));
+                assert.equal(result.output.payload.branches.example.some(option => option.value === remoteRef), false);
             }
         }
     });
 
-    it("reports a fetch failure instead of returning stale branches", async function() {
-        execFileSync("git", ["remote", "add", "origin", path.join(root, "missing.git")], {cwd: path.join(root, "example")});
+    it("returns cached remote branches even when the remote is unavailable", async function() {
+        const repository = path.join(root, "example");
+        execFileSync("git", ["remote", "add", "origin", path.join(root, "missing.git")], {cwd: repository});
+        execFileSync("git", ["update-ref", "refs/remotes/origin/cached", "HEAD"], {cwd: repository});
+        execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/cached"], {cwd: repository});
         const result = await send(new GitListNode({mode: "branches"}), {payload: {repository: "example"}});
-        assert.equal(result.output, undefined);
-        assert.ok(result.error);
+        assert.equal(result.error, undefined);
+        assert.deepEqual(result.output.options, [
+            {label: "main", value: "refs/heads/main"},
+            {label: "origin/cached", value: "refs/remotes/origin/cached"}
+        ]);
+    });
+
+    it("accepts a configured directory that is itself a repository", async function() {
+        settings.gitReposDirectory = path.join(root, "example");
+        const result = await send(new GitListNode({mode: "formData"}), {});
+        assert.equal(result.error, undefined);
+        assert.deepEqual(result.output.payload.repositories, [{label: "example", value: "example"}]);
+        const invalid = await send(new GitListNode({mode: "branches"}), {payload: {repository: "other"}});
+        assert.match(invalid.error.message, /not configured/);
+    });
+
+    it("ignores non-repositories and rejects symbolic repository directories", async function() {
+        fs.ensureDirSync(path.join(root, "not-a-repo"));
+        fs.symlinkSync(path.join(root, "example"), path.join(root, "linked"), "dir");
+        const repositories = await send(new GitListNode({mode: "repositories"}), {});
+        assert.deepEqual(repositories.output.options, [{label: "example", value: "example"}]);
+        const linked = await send(new GitListNode({mode: "branches"}), {payload: {repository: "linked"}});
+        assert.equal(linked.output, undefined);
+        assert.match(linked.error.message, /not a directory/);
+    });
+
+    it("rejects a missing or relative repository root", async function() {
+        for (const directory of ["relative", path.join(root, "missing")]) {
+            settings.gitReposDirectory = directory;
+            const result = await send(new GitListNode({mode: "repositories"}), {});
+            assert.equal(result.output, undefined);
+            assert.ok(result.error);
+        }
     });
 
     it("rejects unknown repositories without exposing other paths", async function() {

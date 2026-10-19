@@ -159,9 +159,17 @@ For local Git repositories, one `git list` node in **Slack form data** mode
 prepares both collections: wire `slack socket → git list → slack form flow` and
 configure select sources as `msg.payload.repositories` and
 `msg.payload.branches` (the latter with `dependsOn: "repository"`).
-Each `git list` input fetches and prunes all remotes before returning options,
-including repository-only and branch-only modes. A failed fetch stops the node
-instead of returning stale options; it does not change the checked-out branch.
+`git list` runs synchronously and reads only local repositories and cached
+branch references; it never fetches from a remote server. The list can therefore
+be older than the remote repository. Local reads briefly block the event loop,
+and large repository collections can still exceed Slack's short-lived trigger.
+Use the separate `git fetch` node to run `git fetch --all --prune` asynchronously
+for all configured repositories or one selected repository. It forwards the
+original message unchanged after success and stops the message on failure;
+it does not switch branches or merge commits.
+For Slack forms, refresh references separately with `Inject → git fetch`, for
+example on a schedule, and keep `Slack Socket → git list → Slack Form` free of
+network fetches.
 The form itself does not inspect Git or require an options feedback wire in
 this mode. Channel and user filters on the Socket node remain optional; without
 them, anyone allowed to invoke the command can see the supplied options.
