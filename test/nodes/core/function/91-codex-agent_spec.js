@@ -87,6 +87,51 @@ describe("codex agent Node", function() {
         assert.equal(result.output.git.path, directory);
     });
 
+    it("passes the configured model ID to Codex without surrounding whitespace", async function() {
+        startThread.returns({id: "thread-model", run: async () => ({finalResponse: "Done", usage: null})});
+        const result = await send(createAgent({model: "  test-model  "}), {git: {path: directory}, payload: "Check this repository"});
+
+        assert.equal(result.error, undefined);
+        assert.equal(startThread.firstCall.args[0].model, "test-model");
+    });
+
+    for (const model of ["", "   "]) {
+        it(`keeps the default model when the model field is ${JSON.stringify(model)}`, async function() {
+            startThread.returns({id: "thread-default-model", run: async () => ({finalResponse: "Done", usage: null})});
+            const result = await send(createAgent({model}), {git: {path: directory}, payload: "Check this repository"});
+
+            assert.equal(result.error, undefined);
+            assert.equal(Object.hasOwn(startThread.firstCall.args[0], "model"), false);
+        });
+    }
+
+    for (const modelReasoningEffort of ["minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"]) {
+        it(`passes reasoning effort ${modelReasoningEffort} with the selected model to Codex`, async function() {
+            startThread.returns({id: "thread-effort", run: async () => ({finalResponse: "Done", usage: null})});
+            const result = await send(createAgent({model: "test-model", modelReasoningEffort}), {git: {path: directory}, payload: "Check this repository"});
+
+            assert.equal(result.error, undefined);
+            assert.equal(startThread.firstCall.args[0].modelReasoningEffort, modelReasoningEffort);
+            assert.equal(startThread.firstCall.args[0].model, "test-model");
+        });
+    }
+
+    it("keeps the default reasoning effort when the selection is empty", async function() {
+        startThread.returns({id: "thread-default-effort", run: async () => ({finalResponse: "Done", usage: null})});
+        const result = await send(createAgent({modelReasoningEffort: ""}), {git: {path: directory}, payload: "Check this repository"});
+
+        assert.equal(result.error, undefined);
+        assert.equal(Object.hasOwn(startThread.firstCall.args[0], "modelReasoningEffort"), false);
+    });
+
+    it("rejects an invalid reasoning effort before creating a thread", async function() {
+        const result = await send(createAgent({modelReasoningEffort: "invalid"}), {git: {path: directory}, payload: "Check this repository"});
+
+        assert.match(result.error.message, /Invalid Codex reasoning effort/);
+        assert.equal(result.output, undefined);
+        assert.equal(startThread.called, false);
+    });
+
     it("uses explicit path and prompt with file edits enabled", async function() {
         startThread.callsFake(function(options) {
             assert.equal(options.workingDirectory, fs.realpathSync(directory));
